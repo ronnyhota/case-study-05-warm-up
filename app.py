@@ -15,6 +15,10 @@ def home():
 # Stage 1: echo
 @app.post("/api/echo")
 def echo():
+    print("Raw request data:", request.data)
+    print("Request headers:", dict(request.headers))
+    print("Parsed JSON:", request.get_json(silent=True))
+
     data = request.get_json(silent=True) or {}
     text = (data.get("text") or "").strip()
     return jsonify({"reply": (text + "?") if text else "?"}), 200
@@ -144,6 +148,10 @@ def agent_endpoint():
         return jsonify({"reply": str(result)}), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+@app.get("/api/health")
+def health():
+    return jsonify({"status": "ok"}), 200
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "5000"))
