@@ -10,7 +10,7 @@ OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "tinyllama")
 
 @app.get("/")
 def home():
-    return render_template("index.html")
+    return "UVA SDS GPT is alive.", 200
 
 # Stage 1: echo
 @app.post("/api/echo")
