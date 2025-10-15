@@ -15,8 +15,10 @@ OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "tinyllama")
 def chat():
     try:
         data = request.get_json(force=True)
+        print("DEBUG: Raw JSON received:", data)
         prompt = (data.get("prompt") or data.get("text") or "").strip()
     except Exception as e:
+        print("DEBUG: JSON parsing failed:", str(e))
         return jsonify({"error": f"JSON parsing failed: {e}"}), 400
 
     if not prompt:
