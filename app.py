@@ -4,28 +4,27 @@ import requests
 
 app = Flask(__name__)
 
-# ----- Basic Info -----
 @app.get("/")
 def home():
     return "UVA SDS GPT is alive.", 200
 
-# ----- TinyLlama via Ollama settings -----
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "tinyllama")
 
-# ----- Unified /api/chat (works for autograder + Ollama) -----
 @app.post("/api/chat")
 def chat():
-    data = request.get_json(force=True) or {}
-    prompt = (data.get("prompt") or data.get("text") or "").strip()
+    try:
+        data = request.get_json(force=True)
+        prompt = (data.get("prompt") or data.get("text") or "").strip()
+    except Exception as e:
+        return jsonify({"error": f"JSON parsing failed: {e}"}), 400
+
     if not prompt:
         return jsonify({"reply": "(empty prompt)"}), 200
 
-    # Echo fallback for autograder
     if not os.getenv("USE_OLLAMA", "").lower() in {"1", "true", "yes"}:
         return jsonify({"reply": prompt}), 200
 
-    # Proxy to Ollama
     system_prefix = "You are UVA SDS GPT. Answer concisely.\n"
     full_prompt = system_prefix + prompt
 
@@ -51,109 +50,12 @@ def chat():
     except Exception as e:
         return jsonify({"error": str(e)}), 502
 
-# ----- Stage 1: echo endpoint -----
 @app.post("/api/echo")
 def echo():
     data = request.get_json(force=True) or {}
     text = (data.get("text") or "").strip()
     return jsonify({"reply": text if text else "?"}), 200
 
-# ----- Stage 3: smolagents safe shell tool -----
-try:
-    from smolagents import Tool, CodeAgent, LiteLLMModel
-except Exception:
-    Tool = None
-    CodeAgent = None
-    LiteLLMModel = None
-
-SANDBOX_DIR = pathlib.Path(__file__).parent / "sandbox"
-SAFE_CMDS = {"pwd", "ls", "cat", "head", "tail", "echo"}
-
-def _in_sandbox(path: str) -> pathlib.Path:
-    p = (SANDBOX_DIR / path).resolve()
-    if not str(p).startswith(str(SANDBOX_DIR.resolve())):
-        raise ValueError("Path escapes sandbox")
-    return p
-
-def _secure_parse(cmd: str):
-    banned = ["|", "&&", "||", ";", "`", "$(", ">", "<"]
-    if any(b in cmd for b in banned):
-        raise ValueError("Pipes/redirects/chaining not allowed")
-    parts = shlex.split(cmd)
-    if not parts:
-        raise ValueError("Empty command")
-    if parts[0] not in SAFE_CMDS:
-        raise ValueError(f"Command '{parts[0]}' not allowed")
-    mapped = []
-    for i, tok in enumerate(parts):
-        if parts[0] == "echo" and i > 0:
-            mapped.append(tok)
-            continue
-        if tok.startswith("-"):
-            mapped.append(tok)
-            continue
-        if any(ch in tok for ch in ("/", "\\")):
-            mapped.append(str(_in_sandbox(tok)))
-        else:
-            mapped.append(tok)
-    return mapped
-
-if Tool is not None:
-    class SafeShellTool(Tool):
-        name = "safe_shell"
-        description = (
-            "Run a small set of read-only shell commands inside a sandbox folder. "
-            "Allowed: pwd, ls, cat, head, tail, echo. Relative paths only."
-        )
-        inputs = {"cmd": {"type": "string", "description": "Shell command"}}
-        output_type = "string"
-
-        def __call__(self, cmd: str) -> str:
-            try:
-                parts = _secure_parse(cmd)
-                proc = subprocess.run(
-                    parts, cwd=SANDBOX_DIR, capture_output=True, text=True, timeout=3
-                )
-                out = (proc.stdout or "") + (proc.stderr or "")
-                if len(out) > 8000:
-                    out = out[:8000] + "\n... [truncated]"
-                return out.strip() or "(no output)"
-            except Exception as e:
-                return f"error: {e}"
-
-    def _build_agent():
-        model_id = os.getenv("SMOL_MODEL_ID", f"ollama_chat/{OLLAMA_MODEL}")
-        base_url = os.getenv("SMOL_BASE_URL", OLLAMA_URL)
-        try:
-            model = LiteLLMModel(model_id=model_id, api_base=base_url, api_key="none")
-        except Exception:
-            model = LiteLLMModel(model_id=model_id)
-        tools = [SafeShellTool()]
-        return CodeAgent(tools=tools, model=model, add_base_tools=False)
-else:
-    def _build_agent():
-        return None
-
-_AGENT = None
-
-@app.post("/api/agent")
-def agent_endpoint():
-    global _AGENT
-    if _AGENT is None:
-        _AGENT = _build_agent()
-        if _AGENT is None:
-            return jsonify({"error": "smolagents not installed"}), 500
-    data = request.get_json(force=True) or {}
-    text = (data.get("text") or "").strip()
-    if not text:
-        return jsonify({"reply": "(empty prompt)"}), 200
-    try:
-        result = _AGENT.run(text)
-        return jsonify({"reply": str(result)}), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-# ----- Health check -----
 @app.get("/api/health")
 def health():
     return jsonify({"status": "ok"}), 200
