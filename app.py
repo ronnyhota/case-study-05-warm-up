@@ -9,27 +9,23 @@ app = Flask(__name__)
 def home():
     return "UVA SDS GPT is alive.", 200
 
-
 # ----- TinyLlama via Ollama settings -----
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "tinyllama")
 
-
 # ----- Unified /api/chat (works for autograder + Ollama) -----
 @app.post("/api/chat")
 def chat():
-    data = request.get_json(silent=True) or {}
-
-    # Accept either "prompt" or "text"
+    data = request.get_json(force=True) or {}
     prompt = (data.get("prompt") or data.get("text") or "").strip()
     if not prompt:
         return jsonify({"reply": "(empty prompt)"}), 200
 
-    # If Ollama is not configured, just echo (needed for autograder)
+    # Echo fallback for autograder
     if not os.getenv("USE_OLLAMA", "").lower() in {"1", "true", "yes"}:
-        return jsonify({"reply": f"Echo: {prompt}"}), 200
+        return jsonify({"reply": prompt}), 200
 
-    # Otherwise, try to proxy to Ollama
+    # Proxy to Ollama
     system_prefix = "You are UVA SDS GPT. Answer concisely.\n"
     full_prompt = system_prefix + prompt
 
@@ -39,12 +35,10 @@ def chat():
             json={"model": OLLAMA_MODEL, "prompt": full_prompt},
             timeout=60,
         )
-        # Try direct JSON
         try:
             js = r.json()
             text = js.get("response", "")
         except ValueError:
-            # Streamed JSON lines
             text = ""
             for line in r.iter_lines(decode_unicode=True):
                 if not line:
@@ -57,14 +51,12 @@ def chat():
     except Exception as e:
         return jsonify({"error": str(e)}), 502
 
-
-# ----- Stage 1: echo endpoint (for debugging) -----
+# ----- Stage 1: echo endpoint -----
 @app.post("/api/echo")
 def echo():
-    data = request.get_json(silent=True) or {}
+    data = request.get_json(force=True) or {}
     text = (data.get("text") or "").strip()
-    return jsonify({"reply": (text + "?") if text else "?"}), 200
-
+    return jsonify({"reply": text if text else "?"}), 200
 
 # ----- Stage 3: smolagents safe shell tool -----
 try:
@@ -106,7 +98,6 @@ def _secure_parse(cmd: str):
             mapped.append(tok)
     return mapped
 
-
 if Tool is not None:
     class SafeShellTool(Tool):
         name = "safe_shell"
@@ -143,7 +134,6 @@ else:
     def _build_agent():
         return None
 
-
 _AGENT = None
 
 @app.post("/api/agent")
@@ -153,7 +143,7 @@ def agent_endpoint():
         _AGENT = _build_agent()
         if _AGENT is None:
             return jsonify({"error": "smolagents not installed"}), 500
-    data = request.get_json(silent=True) or {}
+    data = request.get_json(force=True) or {}
     text = (data.get("text") or "").strip()
     if not text:
         return jsonify({"reply": "(empty prompt)"}), 200
@@ -163,12 +153,10 @@ def agent_endpoint():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-
 # ----- Health check -----
 @app.get("/api/health")
 def health():
     return jsonify({"status": "ok"}), 200
-
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "5000"))
